@@ -21,14 +21,11 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -39,19 +36,16 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.python-version }}
+          name: wheels-linux-x86_64
           path: dist
 
   macos:
     runs-on: macos-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -61,7 +55,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.python-version }}
+          name: wheels-macos-x86_64
           path: dist
 
   sdist:
@@ -86,6 +80,7 @@ jobs:
     needs: [linux, macos, sdist]
     permissions:
       contents: write
+      pages: write
     steps:
       - uses: actions/download-artifact@v4
       - name: Upload to GitHub Releases
@@ -93,6 +88,48 @@ jobs:
         with:
           files: wheels-*/*
           fail_on_unmatched_files: true
+      - name: Create simple repository index
+        run: |
+          mkdir -p simple/rbloom
+          cd simple/rbloom
+
+          # Create index.html with all wheels
+          cat > index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+            <head><title>Links for rbloom</title></head>
+            <body>
+              <h1>Links for rbloom</h1>
+          EOF
+
+          # Add links for all wheels and sdist
+          for file in ../../wheels-*/*; do
+            filename=$(basename "$file")
+            echo "      <a href=\"https://github.com/marin-community/rbloom/releases/download/${{ github.ref_name }}/$filename\">$filename</a><br/>" >> index.html
+          done
+
+          cat >> index.html <<'EOF'
+            </body>
+          </html>
+          EOF
+
+          # Create root index
+          cd ..
+          cat > index.html <<'EOF'
+          <!DOCTYPE html>
+          <html>
+            <head><title>Simple index</title></head>
+            <body>
+              <a href="rbloom/">rbloom</a><br/>
+            </body>
+          </html>
+          EOF
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./simple
+          keep_files: false
       - name: Publish to PyPI
         uses: PyO3/maturin-action@v1
         env:
