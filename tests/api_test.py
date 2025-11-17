@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
-import gc
-import weakref
-
-from rbloom import Bloom
+import io
+import os
 from hashlib import sha256
 from pickle import dumps
-import os
+
+from rbloom import Bloom
+
+
+def hash_func(obj):
+    """Convert arbitrary objects to i128 integers for hashing."""
+    h = sha256(dumps(obj)).digest()
+    return int.from_bytes(h[:16], "big", signed=True)
 
 
 def test_bloom(bloom: Bloom):
     assert not bloom
     assert bloom.approx_items == 0.0
 
-    bloom.add('foo')
+    bloom.add(hash_func('foo'))
     assert bloom
     assert bloom.approx_items > 0.0
 
-    bloom.add('bar')
+    bloom.add(hash_func('bar'))
 
-    assert 'foo' in bloom
-    assert 'bar' in bloom
-    assert 'baz' not in bloom
+    assert hash_func('foo') in bloom
+    assert hash_func('bar') in bloom
+    assert hash_func('baz') not in bloom
 
-    bloom.update(['baz', 'qux'])
-    assert 'baz' in bloom
-    assert 'qux' in bloom
+    bloom.update([hash_func('baz'), hash_func('qux')])
+    assert hash_func('baz') in bloom
+    assert hash_func('qux') in bloom
 
     other = bloom.copy()
     assert other == bloom
@@ -34,12 +39,12 @@ def test_bloom(bloom: Bloom):
     assert not other
     assert other.approx_items == 0.0
 
-    other.update(['foo', 'bar', 'baz', 'qux'])
+    other.update([hash_func('foo'), hash_func('bar'), hash_func('baz'), hash_func('qux')])
     assert other == bloom
 
-    other.update(str(i).encode()*500 for i in range(100000))
+    other.update(hash_func(str(i).encode()*500) for i in range(100000))
     for i in range(100000):
-        assert str(i).encode()*500 in other
+        assert hash_func(str(i).encode()*500) in other
     assert bloom != other
     assert bloom & other == bloom
     assert bloom | other == other
@@ -72,64 +77,52 @@ def test_bloom(bloom: Bloom):
     bloom.intersection_update(other)
     assert bloom == orig
 
-    # TEST PERSISTENCE
-    if not bloom.hash_func is hash:
-        # find a filename that doesn't exist
-        i = 0
-        while os.path.exists(f'UNIT_TEST_{i}.bloom'):
-            i += 1
-        filename = f'test{i}.bloom'
+    # TEST FILE PERSISTENCE
+    i = 0
+    while os.path.exists(f'test{i}.bloom'):
+        i += 1
+    filename = f'test{i}.bloom'
 
-        try:
-            # save and load
-            bloom.save(filename)
-            bloom2 = Bloom.load(filename, bloom.hash_func)
-            assert bloom == bloom2
-        finally:
-            # remove the file
-            os.remove(filename)
+    try:
+        # save and load from file path
+        bloom.save(filename)
+        bloom2 = Bloom.load(filename)
+        assert bloom == bloom2
+    finally:
+        # remove the file
+        os.remove(filename)
 
-        # TEST bytes PERSISTENCE
-        bloom_bytes = bloom.save_bytes()
-        assert type(bloom_bytes) == bytes
-        bloom3 = Bloom.load_bytes(bloom_bytes, bloom.hash_func)
-        assert bloom == bloom3
+    # TEST FILE OBJECT PERSISTENCE
+    buffer = io.BytesIO()
+    bloom.save(buffer)
+    buffer.seek(0)
+    bloom3 = Bloom.load(buffer)
+    assert bloom == bloom3
 
+    # TEST bytes PERSISTENCE
+    bloom_bytes = bloom.save_bytes()
+    assert type(bloom_bytes) == bytes
+    bloom4 = Bloom.load_bytes(bloom_bytes)
+    assert bloom == bloom4
 
-def sha_based(obj):
-    h = sha256(dumps(obj)).digest()
-    return int.from_bytes(h[:16], "big") - 2**127
-
-
-def circular_ref():
-    def loop_hash_func(x):
-        return sha_based(x)
-    weak_ref = weakref.ref(loop_hash_func)
-    bloom = Bloom(1000, 0.1, hash_func=loop_hash_func)
-    assert gc.get_referents(bloom) == [loop_hash_func]
-    loop_hash_func.bloom = bloom
-    del bloom
-    del loop_hash_func
-    gc.collect()
-    assert weak_ref() is None
 
 def operations_with_self():
     bloom = Bloom(1000, 0.1)
-    bloom.add('foo')
-    assert 'foo' in bloom
+    bloom.add(hash_func('foo'))
+    assert hash_func('foo') in bloom
     bloom |= bloom
     bloom &= bloom
     bloom.update(bloom)
     bloom.update(bloom, bloom)
-    bloom.update(bloom, ['bob'], bloom)
-    assert 'foo' in bloom
-    assert 'bob' in bloom
+    bloom.update(bloom, [hash_func('bob')], bloom)
+    assert hash_func('foo') in bloom
+    assert hash_func('bob') in bloom
 
     bloom.intersection_update(bloom)
     bloom.intersection_update(bloom, bloom)
-    bloom.intersection_update(bloom, ['foo'], bloom)
-    assert 'foo' in bloom
-    assert 'bob' not in bloom
+    bloom.intersection_update(bloom, [hash_func('foo')], bloom)
+    assert hash_func('foo') in bloom
+    assert hash_func('bob') not in bloom
     assert bloom == bloom
     assert bloom <= bloom
     assert bloom >= bloom
@@ -145,15 +138,11 @@ def operations_with_self():
 
 def api_suite():
     assert repr(Bloom(27_000, 0.0317)) == "<Bloom size_in_bits=193960 approx_items=0.0>"
-    assert Bloom(1140, 0.999).hash_func == hash
-    assert Bloom(102, 0.01, hash_func=hash).hash_func is hash
-    assert Bloom(103100, 0.51, hash_func=sha_based).hash_func is sha_based
 
     test_bloom(Bloom(13242, 0.0000001))
-    test_bloom(Bloom(9874124, 0.01, hash_func=sha_based))
-    test_bloom(Bloom(2837, 0.5, hash_func=hash))
+    test_bloom(Bloom(9874124, 0.01))
+    test_bloom(Bloom(2837, 0.5))
 
-    circular_ref()
     operations_with_self()
 
     print('All API tests passed')
