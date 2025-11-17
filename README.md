@@ -5,15 +5,21 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17084925.svg)](https://doi.org/10.5281/zenodo.17084925)
 [![build](https://img.shields.io/github/actions/workflow/status/KenanHanke/rbloom/CI.yml)](https://github.com/KenanHanke/rbloom/actions)
 
+## Fork Differences
+
+This differs from the upstream [KenanHanke/rbloom](https://github.com/KenanHanke/rbloom) with the following changes:
+
+- **Pre-hashing API**: Accepts pre-hashed `i128` integers instead of arbitrary objects. The `hash_func` parameter has been removed entirely.
+- **File object support**: `save()` and `load()` now accept file-like objects (e.g., `io.BytesIO`) in addition to file paths.
+- **Build targets**: Simplified to x86_64 only, Python 3.11+, with wheels hosted via GitHub releases.
+
 A fast, simple and lightweight
 [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) library for
 Python, implemented in Rust. It's designed to be as pythonic as possible,
-mimicking the built-in `set` type where it can, and works with any
-hashable object. While it's a new library (this project was started in
-2023), it's currently the fastest option for Python by
-a long shot (see the section
-[Benchmarks](#benchmarks)). Releases are published on
-[PyPI](https://pypi.org/project/rbloom/).
+mimicking the built-in `set` type where it can. This fork requires pre-hashed
+integer values, giving you full control over the hashing function. While it's
+a new library (this project was started in 2023), it's currently the fastest
+option for Python by a long shot (see the section [Benchmarks](#benchmarks)).
 
 ## Quickstart
 
@@ -21,13 +27,20 @@ This library defines only one class, which can be used as follows:
 
 ```python
 >>> from rbloom import Bloom
+>>> from hashlib import sha256
+>>>
+>>> # Helper function to hash objects to i128 integers
+>>> def hash_obj(obj):
+...     h = sha256(str(obj).encode()).digest()
+...     return int.from_bytes(h[:16], "big", signed=True)
+>>>
 >>> bf = Bloom(200, 0.01)  # 200 items max, false positive rate of 1%
->>> bf.add("hello")
->>> "hello" in bf
+>>> bf.add(hash_obj("hello"))
+>>> hash_obj("hello") in bf
 True
->>> "world" in bf
+>>> hash_obj("world") in bf
 False
->>> bf.update(["hello", "world"])  # "hello" and "world" now in bf
+>>> bf.update([hash_obj("hello"), hash_obj("world")])  # both now in bf
 >>> other_bf = Bloom(200, 0.01)
 
 ### add some items to other_bf
@@ -96,13 +109,19 @@ The following simple benchmark was implemented in the respective API of
 each library (see the [comparison benchmarks](benchmarks/compare.py)):
 
 ```python
+from hashlib import sha256
+
+def hash_obj(obj):
+    h = sha256(str(obj).encode()).digest()
+    return int.from_bytes(h[:16], "big", signed=True)
+
 bf = Bloom(10_000_000, 0.01)
 
 for i in range(10_000_000):
-    bf.add(i + 0.5)  # floats because ints are hashed as themselves
+    bf.add(hash_obj(i + 0.5))
 
 for i in range(10_000_000):
-    assert i + 0.5 in bf
+    assert hash_obj(i + 0.5) in bf
 ```
 
 This resulted in the following average runtimes on an M1 Pro (confirmed to be proportional to runtimes on an Intel machine):
@@ -121,51 +140,47 @@ the problems mentioned below in the section "Cryptographic security".
 
 Also note that `rbloom` is compiled against a stable ABI for
 portability, and that you can get a small but measurable speedup by
-removing the `"abi3-py37"` flag from `Cargo.toml` and building
+removing the `"abi3-py311"` flag from `Cargo.toml` and building
 it yourself.
 
 ## Documentation
 
 This library defines only one class, the signature of which should be
-thought of as follows. Note that only the first few methods differ from
-the built-in `set` type:
+thought of as follows. Note that this fork requires pre-hashed i128
+integers rather than arbitrary objects:
 
 ```python
 class Bloom:
 
     # expected_items:  max number of items to be added to the filter
     # false_positive_rate:  max false positive rate of the filter
-    # hash_func:  optional argument, see section "Cryptographic security"
-    def __init__(self, expected_items: int, false_positive_rate: float,
-                 hash_func=__builtins__.hash)
+    def __init__(self, expected_items: int, false_positive_rate: float)
 
     @property
     def size_in_bits(self) -> int      # number of buckets in the filter
 
     @property
-    def hash_func(self) -> Callable[[Any], int]   # retrieve the hash_func
-                                                  # given to __init__
-
-    @property
     def approx_items(self) -> float    # estimated number of items in
                                        # the filter
 
-    # see section "Persistence" for more information on these four methods
+    # see section "Persistence" for more information on these methods
+    # filepath can be a string path or a file-like object with write()/read()
     @classmethod
-    def load(cls, filepath: str, hash_func) -> Bloom
-    def save(self, filepath: str)
+    def load(cls, filepath: Union[str, IO]) -> Bloom
+    def save(self, filepath: Union[str, IO])
     @classmethod
-    def load_bytes(cls, data: bytes, hash_func) -> Bloom
+    def load_bytes(cls, data: bytes) -> Bloom
     def save_bytes(self) -> bytes
 
     #####################################################################
     #                    ALL SUBSEQUENT METHODS ARE                     #
     #              EQUIVALENT TO THE CORRESPONDING METHODS              #
-    #                     OF THE BUILT-IN SET TYPE                      #
+    #              OF THE BUILT-IN SET TYPE, EXCEPT THEY                #
+    #                 EXPECT PRE-HASHED i128 INTEGERS                   #
     #####################################################################
 
-    def add(self, obj)                            # add obj to self
-    def __contains__(self, obj) -> bool           # check if obj in self
+    def add(self, hashed: int)                    # add hashed value to self
+    def __contains__(self, hashed: int) -> bool   # check if hashed in self
     def __bool__(self) -> bool                    # False if empty
     def __repr__(self) -> str                     # basic info
 
@@ -175,10 +190,11 @@ class Bloom:
     def __iand__(self, other: Bloom)              # self &= other
 
     # these extend the functionality of __or__, __ior__, __and__, __iand__
-    def union(self, *others: Union[Iterable, Bloom]) -> Bloom        # __or__
-    def update(self, *others: Union[Iterable, Bloom])                # __ior__
-    def intersection(self, *others: Union[Iterable, Bloom]) -> Bloom # __and__
-    def intersection_update(self, *others: Union[Iterable, Bloom])   # __iand__
+    # iterables should contain pre-hashed i128 integers
+    def union(self, *others: Union[Iterable[int], Bloom]) -> Bloom        # __or__
+    def update(self, *others: Union[Iterable[int], Bloom])                # __ior__
+    def intersection(self, *others: Union[Iterable[int], Bloom]) -> Bloom # __and__
+    def intersection_update(self, *others: Union[Iterable[int], Bloom])   # __iand__
 
     # these implement <, >, <=, >=, ==, !=
     def __lt__, __gt__, __le__, __ge__, __eq__, __ne__(self,
@@ -191,85 +207,90 @@ class Bloom:
 ```
 
 To prevent death and destruction, the bitwise set operations only work on
-filters where all parameters are equal (including the hash functions being
-the exact same object). Because this is a Bloom filter, the `__contains__`
-and `approx_items` methods are probabilistic, as are all the methods that
-compare two filters (such as `__le__` and `issubset`).
+filters where all parameters are equal. Because this is a Bloom filter, the
+`__contains__` and `approx_items` methods are probabilistic, as are all the
+methods that compare two filters (such as `__le__` and `issubset`).
 
-## Cryptographic security
+## Pre-hashing
 
-Python's built-in hash function is designed to be fast, not maximally
-collision-resistant, so if your program depends on the false positive rate
-being perfectly correct, you may want to supply your own hash function.
-This is especially the case when working with very large filters (more
-than a few tens of millions of items) or when false positives are very
-costly and could be exploited by an adversary. Just make sure that your
-hash function returns an integer between -2^127 and 2^127 - 1. Feel free
-to use the following example in your own code:
+This fork requires you to pre-hash your objects to i128 integers before
+adding them to the filter. Your hash function must return an integer between
+-2^127 and 2^127 - 1. This gives you full control over the hashing strategy.
+
+For most use cases, SHA256-based hashing is recommended:
 
 ```python
 from rbloom import Bloom
 from hashlib import sha256
-from pickle import dumps
 
-def hash_func(obj):
-    h = sha256(dumps(obj)).digest()
+def hash_obj(obj):
+    h = sha256(str(obj).encode()).digest()
     # use sys.byteorder instead of "big" for a small speedup when
     # reproducibility across machines isn't a concern
     return int.from_bytes(h[:16], "big", signed=True)
 
-bf = Bloom(100_000_000, 0.01, hash_func)
+bf = Bloom(100_000_000, 0.01)
+bf.add(hash_obj("my_item"))
+assert hash_obj("my_item") in bf
 ```
 
-When you throw away Python's built-in hash function and start hashing
-serialized representations of objects, however, you open up a breach into
-the scary realm of the unpythonic:
+If you need Python-compatible hashing (where `1`, `1.0`, and `True` are
+considered equal), you can use `hash()`:
 
-- Numbers like `1`, `1.0`, `1 + 0j` and `True` will suddenly no longer
-  be equal.
-- Instances of classes with custom hashing logic (e.g. to stop
-  caches inside instances from affecting their hashes) will suddenly
-  display undefined behavior.
-- Objects that can't be serialized simply won't be hashable at all.
+```python
+def hash_obj(obj):
+    h = hash(obj)
+    # Clamp to i128 range
+    return max(-2**127, min(h, 2**127 - 1))
+```
 
-Making you supply your own hash function in this case is a deliberate
-design decision intended to show you what you're doing and prevent
-you from shooting yourself in the foot.
-
-Also note that using a custom hash will incur a performance penalty over
-using the built-in hash.
+Note that `hash()` uses a random salt that changes between Python
+invocations, so filters using `hash()` cannot be persisted to disk.
 
 ## Persistence
 
 The `save` and `load` methods, along with their byte-oriented counterparts
 `save_bytes` and `load_bytes`, allow you to save and load filters to and
-from disk/Python `bytes` objects. However, as the built-in hash function's
-salt changes between invocations of Python, they only work on filters with
-custom hash functions. Note that it is your responsibility to ensure that
-the hash function you supply to the loading functions is the same as the
-one originally used by the filter you're loading!
+from disk/Python `bytes` objects. The `save` and `load` methods accept either
+file paths (as strings) or file-like objects (anything with `write()`/`read()` methods).
 
 ```python
-bf = Bloom(10_000, 0.01, some_hash_func)
-bf.add("hello")
-bf.add("world")
+from hashlib import sha256
+import io
 
-# saving to a file
+def hash_obj(obj):
+    h = sha256(str(obj).encode()).digest()
+    return int.from_bytes(h[:16], "big", signed=True)
+
+bf = Bloom(10_000, 0.01)
+bf.add(hash_obj("hello"))
+bf.add(hash_obj("world"))
+
+# saving to a file path
 bf.save("bf.bloom")
 
-# loading from a file
-loaded_bf = Bloom.load("bf.bloom", some_hash_func)
+# loading from a file path
+loaded_bf = Bloom.load("bf.bloom")
+assert loaded_bf == bf
+
+# saving to a file-like object
+buffer = io.BytesIO()
+bf.save(buffer)
+
+# loading from a file-like object
+buffer.seek(0)
+loaded_bf = Bloom.load(buffer)
 assert loaded_bf == bf
 
 # saving to bytes
 bf_bytes = bf.save_bytes()
 
 # loading from bytes
-loaded_bf_from_bytes = Bloom.load_bytes(bf_bytes, some_hash_func)
+loaded_bf_from_bytes = Bloom.load_bytes(bf_bytes)
 assert loaded_bf_from_bytes == bf
 ```
 
-The size of the file is `bf.size_in_bits / 8 + 8` bytes.
+The size of the saved filter is `bf.size_in_bits / 8 + 8` bytes.
 
 ---
 
