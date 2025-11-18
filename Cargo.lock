@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "rbloom"
-version = "1.5.4"
+version = "1.6.2"
 dependencies = [
  "pyo3",
 ]

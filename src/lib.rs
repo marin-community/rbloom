@@ -300,13 +300,26 @@ impl Bloom {
 
     /// Save to a file or file-like object, see "Persistence" section in the README
     fn save(&self, dest: &Bound<'_, PyAny>) -> PyResult<()> {
-        let data = self.to_bytes();
-
         if dest.hasattr("write")? {
-            // File-like object with write() method
-            dest.call_method1("write", (data,))?;
+            // File-like object with write() method - use chunked writing
+            const CHUNK_SIZE: usize = 32 * 1024 * 1024; // 32 MB chunks
+
+            let py = dest.py();
+
+            // Write k value first (8 bytes)
+            let k_bytes = self.k.to_le_bytes();
+            let k_py_bytes = pyo3::types::PyBytes::new(py, &k_bytes);
+            dest.call_method1("write", (k_py_bytes,))?;
+
+            // Write filter bits in chunks
+            let bits = self.filter.bits();
+            for chunk in bits.chunks(CHUNK_SIZE) {
+                let chunk_py_bytes = pyo3::types::PyBytes::new(py, chunk);
+                dest.call_method1("write", (chunk_py_bytes,))?;
+            }
         } else {
-            // Try as path
+            // Try as path - write entire file at once
+            let data = self.to_bytes();
             let path: PathBuf = dest.extract()?;
             std::fs::write(path, &data)?;
         }
