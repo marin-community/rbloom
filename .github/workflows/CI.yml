@@ -33,6 +33,14 @@ jobs:
           args: --release --out dist
           sccache: "true"
           manylinux: auto
+      - name: Copy wheel for multiple Python versions
+        run: |
+          cd dist
+          for wheel in *-cp311-abi3-*.whl; do
+            cp "$wheel" "${wheel/cp311-abi3/cp312-abi3}"
+            cp "$wheel" "${wheel/cp311-abi3/cp313-abi3}"
+            cp "$wheel" "${wheel/cp311-abi3/cp314-abi3}"
+          done
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -52,6 +60,14 @@ jobs:
           target: aarch64
           args: --release --out dist
           sccache: "true"
+      - name: Copy wheel for multiple Python versions
+        run: |
+          cd dist
+          for wheel in *-cp311-abi3-*.whl; do
+            cp "$wheel" "${wheel/cp311-abi3/cp312-abi3}"
+            cp "$wheel" "${wheel/cp311-abi3/cp313-abi3}"
+            cp "$wheel" "${wheel/cp311-abi3/cp314-abi3}"
+          done
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
